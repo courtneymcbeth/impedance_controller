@@ -1,7 +1,7 @@
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import WrenchStamped
-from geometry_msgs.msg import Twist
+from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 import numpy as np
 from scipy.linalg import expm
 
@@ -17,8 +17,8 @@ class ImpedanceController(Node):
             10)
         self.subscription  # prevent unused variable warning
 
-        # Publisher for the desired velocity
-        self.velocity_publisher = self.create_publisher(Twist, '/desired_velocity', 10)
+        # Publisher for the joint velocities
+        self.joint_trajectory_publisher = self.create_publisher(JointTrajectory, '/joint_trajectory_controller/joint_trajectory', 10)
         
         # Impedance control parameters
         self.mass_matrix = np.diag([1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
@@ -61,20 +61,21 @@ class ImpedanceController(Node):
         self.current_velocity += acceleration * 0.001  # Assume 1 ms time step
         self.current_position += self.current_velocity * 0.001
 
-        # Publish the desired velocity
-        self.publish_desired_velocity()
+        # Publish the desired joint velocities
+        self.publish_joint_velocities()
 
-    def publish_desired_velocity(self):
-        """Publish the desired velocity as a Twist message."""
-        twist_msg = Twist()
-        twist_msg.linear.x = self.current_velocity[0]
-        twist_msg.linear.y = self.current_velocity[1]
-        twist_msg.linear.z = self.current_velocity[2]
-        twist_msg.angular.x = self.current_velocity[3]
-        twist_msg.angular.y = self.current_velocity[4]
-        twist_msg.angular.z = self.current_velocity[5]
+    def publish_joint_velocities(self):
+        """Publish the desired joint velocities as a JointTrajectory message."""
+        trajectory_msg = JointTrajectory()
+        trajectory_msg.joint_names = ['joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6']
 
-        self.velocity_publisher.publish(twist_msg)
+        point = JointTrajectoryPoint()
+        point.velocities = self.current_velocity.tolist()
+        point.time_from_start = rclpy.time.Duration(seconds=0.001)  # Specify the time duration
+
+        trajectory_msg.points = [point]
+
+        self.joint_trajectory_publisher.publish(trajectory_msg)
 
     def apply_control_command(self):
         """Send the control command to the robot."""
