@@ -1,3 +1,5 @@
+import os
+from glob import glob
 from setuptools import setup
 
 package_name = 'custom_controller'
@@ -8,6 +10,10 @@ setup(
     packages=[package_name],
     py_modules=[
         'custom_controller.impedance_controller',
+    ],
+    data_files=[
+        (os.path.join('share', package_name, 'launch'), glob(os.path.join('launch', '*launch.[pxy][yma]*'))),
+        (os.path.join('share', package_name, 'urdf'), glob(os.path.join('urdf', '*.urdf'))),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
