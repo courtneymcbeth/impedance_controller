@@ -12,18 +12,24 @@ import pinocchio as pin
 import os
 from ament_index_python.packages import get_package_share_directory
 
+# moveit python library
+from moveit.core.robot_state import RobotState
+from moveit.planning import (
+    MoveItPy,
+)
+
 
 class ImpedanceController(Node):
     def __init__(self):
         super().__init__('impedance_controller')
 
         # Subscribe to the force-torque sensor data
-        self.force_subscription = self.create_subscription(
-            WrenchStamped,
-            '/force_torque_sensor_broadcaster/wrench',
-            self.force_torque_callback,
-            10)
-        self.force_subscription  # prevent unused variable warning
+        # self.force_subscription = self.create_subscription(
+        #     WrenchStamped,
+        #     '/force_torque_sensor_broadcaster/wrench',
+        #     self.force_torque_callback,
+        #     10)
+        # self.force_subscription  # prevent unused variable warning
 
         # Subscribe to the current joint states
         self.joint_state_subscription = self.create_subscription(
@@ -53,160 +59,215 @@ class ImpedanceController(Node):
 
         # Force-torque data
         self.force_torque = np.zeros(6)
+        self.ee_pose = np.zeros(3)
 
         # Current joint states
         self.current_joint_positions = None
 
+        self.ur5e = MoveItPy(node_name="moveit_py")
+        self.arm = self.ur5e.get_planning_component("ur_manipulator")
+        self.psm = self.ur5e.get_planning_scene_monitor()
+        
+        # robot_model = ur5e.get_robot_model()
+        # robot_state = RobotState(robot_model)
+        # ee_pose = robot_state.get_global_link_transform("tool0")
+        # ee_pose_str = np.array2string(ee_pose, precision=4, separator=', ')
+        # ee_frame = robot_state.get_frame_transform("tool0")
+        # ee_frame_str = np.array2string(ee_frame, precision=4, separator=', ')
+        # joint_pos = robot_state.joint_positions
+        # self.get_logger().info('!!!!!!!!!!!!!!HERE!!!!!!!!!!!!!!!!!!')
+        # # self.get_logger().info(f'ee: {ee_pose_str}')
+        # # self.get_logger().info(f'ee_f: {ee_frame_str}')
+
+        with self.psm.read_only() as scene:
+            psm_robot_state = scene.current_state
+            ee_pose = psm_robot_state.get_global_link_transform("tool0")
+            self.ee_pose = ee_pose[:3, 3]
+
+            pose_goal = Pose()
+            pose_goal.position.x = 0.25
+            pose_goal.position.y = 0.25
+            pose_goal.position.z = 0.5
+            pose_goal.orientation.w = 1.0
+            psm_robot_state.set_from_ik("ur_manipulator", pose_goal, "tool0")
+        #     original_joint_positions = psm_robot_state.get_joint_group_positions("ur_manipulator")
+        #     ojp_str = np.array2string(original_joint_positions, precision=4, separator=', ')
+
+        #     self.get_logger().info(f'{type(psm_robot_state)}')
+        #     self.get_logger().info(f'{ojp_str}')
+
+        #     ee_pose = psm_robot_state.get_global_link_transform("tool0")
+        #     self.ee_pose = ee_pose[:3, 3]
+        #     ee_pose_str = np.array2string(ee_pose, precision=4, separator=', ')
+        #     self.get_logger().info(f'ee: {ee_pose_str}')
+
+        #     # ee_frame = psm_robot_state.get_frame_transform("tool0")
+        #     # ee_frame_str = np.array2string(ee_frame, precision=4, separator=', ')
+        #     # self.get_logger().info(f'ee_f: {ee_frame_str}')
+            
+        # # for key, val in joint_pos.items():
+        # #     self.get_logger().info(f'{key}: {val}')
+        # self.get_logger().info('!!!!!!!!!!!!!!HERE!!!!!!!!!!!!!!!!!!')
+
+
         # Load the robot model from the URDF
-        urdf_file = os.path.join(get_package_share_directory('custom_controller'), 'urdf', 'ur5e.urdf')
-        self.robot_model = pin.buildModelFromUrdf(urdf_file)
-        self.robot_data = self.robot_model.createData()
-        self.ee_frame_id = self.robot_model.getFrameId('tool0')  # Replace with actual frame name
+        # urdf_file = os.path.join(get_package_share_directory('custom_controller'), 'urdf', 'ur5e.urdf')
+        # self.robot_model = pin.buildModelFromUrdf(urdf_file)
+        # self.robot_data = self.robot_model.createData()
+        # self.ee_frame_id = self.robot_model.getFrameId('tool0')  # Replace with actual frame name
         # self.ee_frame_id = 6
         # print(self.ee_frame_id)
         # print(self.robot_data.oMi[6])
 
-        self.desired_set = False
+        # self.desired_set = False
 
-        self.eps = 1e-4
-        self.IT_MAX = 1000
-        self.DT = 1e-1
-        self.damp = 1e-12
+        # self.eps = 1e-4
+        # self.IT_MAX = 1000
+        # self.DT = 1e-1
+        # self.damp = 1e-12
 
     def joint_state_callback(self, msg):
         """Callback to update the current joint states."""
         self.current_joint_positions = np.array(msg.position)
-        self.compute_forward_kinematics()
+        # self.compute_forward_kinematics()
 
-    def compute_forward_kinematics(self):
-        """Compute the end-effector position using forward kinematics."""
-        if self.current_joint_positions is not None:
-            pin.forwardKinematics(self.robot_model, self.robot_data, self.current_joint_positions)
-            ee_pose = pin.updateFramePlacement(self.robot_model, self.robot_data, self.ee_frame_id)
-            # print("ee_pose: ", ee_pose)
-            self.current_position = ee_pose.translation
-            # print("current pos: ", self.current_position)
-            if not self.desired_set:
-                self.desired_position = self.current_position
-                self.desired_set = True
+        # self.get_logger().info('!!!!!!!!!!!!!!HERE!!!!!!!!!!!!!!!!!!')
+        with self.psm.read_only() as scene:
+            psm_robot_state = scene.current_state
+            ee_pose = psm_robot_state.get_global_link_transform("tool0")
+            self.ee_pose = ee_pose[:3, 3]
 
-    def force_torque_callback(self, msg):
-        """Callback to update the force-torque data from the sensor."""
-        self.force_torque = np.array([msg.wrench.force.x,
-                                      msg.wrench.force.y,
-                                      msg.wrench.force.z,
-                                      msg.wrench.torque.x,
-                                      msg.wrench.torque.y,
-                                      msg.wrench.torque.z])
+            self.publish_ee_pose(ee_pose[:3, 3])
 
-        # nullify
-        for i in range(len(self.force_torque)):
-            if abs(self.force_torque[i]) < 3.0:
-                self.force_torque[i] = 0.0
-        if np.sum(self.force_torque) < 3.0:
-            self.current_velocity = np.zeros(3)
+    # def compute_forward_kinematics(self):
+    #     """Compute the end-effector position using forward kinematics."""
+    #     # if self.current_joint_positions is not None:
+    #         # pin.forwardKinematics(self.robot_model, self.robot_data, self.current_joint_positions)
+    #         # ee_pose = pin.updateFramePlacement(self.robot_model, self.robot_data, self.ee_frame_id)
+    #         # # print("ee_pose: ", ee_pose)
+    #         # self.current_position = ee_pose.translation
+    #         # # print("current pos: ", self.current_position)
+    #         # if not self.desired_set:
+    #         #     self.desired_position = self.current_position
+    #         #     self.desired_set = True
 
-        if self.current_joint_positions is not None:
-            self.update_control()
+    # def force_torque_callback(self, msg):
+    #     """Callback to update the force-torque data from the sensor."""
+    #     self.force_torque = np.array([msg.wrench.force.x,
+    #                                   msg.wrench.force.y,
+    #                                   msg.wrench.force.z,
+    #                                   msg.wrench.torque.x,
+    #                                   msg.wrench.torque.y,
+    #                                   msg.wrench.torque.z])
 
-    def update_control(self):
-        """Calculate the impedance control output and apply it."""
-        position_error = self.desired_position - self.current_position
-        position_error = np.where(np.abs(position_error) < 0.1, 0.0, position_error)
-        # print("pos err: ", position_error)
+    #     # nullify
+    #     # for i in range(len(self.force_torque)):
+    #     #     if abs(self.force_torque[i]) < 3.0:
+    #     #         self.force_torque[i] = 0.0
+    #     # if np.sum(self.force_torque) < 3.0:
+    #     #     self.current_velocity = np.zeros(3)
 
-        velocity_error = self.desired_velocity - self.current_velocity
-        # print("cur vel: ", self.current_velocity)
-        velocity_error = np.where(np.abs(velocity_error) < 0.1, 0.0, velocity_error)
-        # print("vel err: ", velocity_error)
+    #     # if self.current_joint_positions is not None:
+    #     #     self.update_control()
+
+    # def update_control(self):
+    #     """Calculate the impedance control output and apply it."""
+    #     position_error = self.desired_position - self.current_position
+    #     position_error = np.where(np.abs(position_error) < 0.1, 0.0, position_error)
+    #     # print("pos err: ", position_error)
+
+    #     velocity_error = self.desired_velocity - self.current_velocity
+    #     # print("cur vel: ", self.current_velocity)
+    #     velocity_error = np.where(np.abs(velocity_error) < 0.1, 0.0, velocity_error)
+    #     # print("vel err: ", velocity_error)
 
 
-        # print("f/t: ", self.force_torque[:3])
-        acceleration = np.linalg.inv(self.mass_matrix[:3,:3]) @ (
-            self.force_torque[:3] - self.damping_matrix[:3,:3] @ velocity_error - self.stiffness_matrix[:3,:3] @ position_error)
-        # print("accel: ", acceleration)
+    #     # print("f/t: ", self.force_torque[:3])
+    #     acceleration = np.linalg.inv(self.mass_matrix[:3,:3]) @ (
+    #         self.force_torque[:3] - self.damping_matrix[:3,:3] @ velocity_error - self.stiffness_matrix[:3,:3] @ position_error)
+    #     # print("accel: ", acceleration)
 
-        # Update velocity and position (simple Euler integration)
-        self.current_velocity += acceleration * 0.001  # Assume 1 ms time step
-        self.current_position += self.current_velocity * 0.001
+    #     # Update velocity and position (simple Euler integration)
+    #     self.current_velocity += acceleration * 0.001  # Assume 1 ms time step
+    #     self.current_position += self.current_velocity * 0.001
 
-        self.publish_ee_pose(self.current_position)
+    #     self.publish_ee_pose(self.current_position)
 
-        # Calculate the inverse kinematics to get the joint positions
-        joint_positions = self.solve_inverse_kinematics(self.current_position)
+    #     # Calculate the inverse kinematics to get the joint positions
+    #     joint_positions = self.solve_inverse_kinematics(self.current_position)
 
-        # Publish the desired joint positions
-        self.publish_joint_positions(joint_positions)
+    #     # Publish the desired joint positions
+    #     self.publish_joint_positions(joint_positions)
 
-    def solve_inverse_kinematics(self, target_position):
-        """Solve the inverse kinematics to get joint positions."""
-        # q_init = np.zeros(self.robot_model.nq)  # Initial guess
-        q_init = self.current_joint_positions
-        target_placement = pin.SE3(np.eye(3), target_position)  # Only position, no rotation
+    # def solve_inverse_kinematics(self, target_position):
+    #     """Solve the inverse kinematics to get joint positions."""
+    #     # q_init = np.zeros(self.robot_model.nq)  # Initial guess
+    #     q_init = self.current_joint_positions
+    #     target_placement = pin.SE3(np.eye(3), target_position)  # Only position, no rotation
 
-        # print("current: ", q_init)
-        # print("target: ", target_position)
+    #     # print("current: ", q_init)
+    #     # print("target: ", target_position)
 
-        if norm(self.current_position-target_position) < 0.05:
-            success, q_sol = True, q_init
-        else:
-            # Solve IK
-            success, q_sol = self.compute_joint_placement(self.robot_model, self.robot_data, self.ee_frame_id, target_placement, q_init)
+    #     if norm(self.current_position-target_position) < 0.05:
+    #         success, q_sol = True, q_init
+    #     else:
+    #         # Solve IK
+    #         success, q_sol = self.compute_joint_placement(self.robot_model, self.robot_data, self.ee_frame_id, target_placement, q_init)
 
-        if success:
-            return q_sol
-        else:
-            self.get_logger().warn("IK solver did not converge to a solution.")
-            return q_init  # Return initial guess if IK fails
+    #     if success:
+    #         return q_sol
+    #     else:
+    #         self.get_logger().warn("IK solver did not converge to a solution.")
+    #         return q_init  # Return initial guess if IK fails
 
-    def compute_joint_placement(self, model, data, ee_frame_id, target_placement, q_init):
-        q = q_init
-        # print("q: ", q)
-        i = 0
-        while True:
-            pin.forwardKinematics(model, data, q)
-            iMd = data.oMf[ee_frame_id].actInv(target_placement)
-            err = pin.log(iMd).vector
-            if norm(err) < self.eps:
-                success = True
-                break
-            if i >= self.IT_MAX:
-                success = False
-                break
-            J = pin.computeFrameJacobian(model, data, q, ee_frame_id)
-            J = -np.dot(pin.Jlog6(iMd.inverse()), J)
-            v = -J.T.dot(solve(J.dot(J.T) + self.damp * np.eye(6), err))
-            q = pin.integrate(model, q, v * self.DT)
-            # if not i % 10:
-            #     print("%d: error = %s" % (i, err.T))
-            i += 1
-        if success:
-            print("Convergence achieved!")
-        else:
-            print(
-                "\nWarning: the iterative algorithm has not reached convergence to the desired precision"
-            )
-        return success, q
+    # def compute_joint_placement(self, model, data, ee_frame_id, target_placement, q_init):
+    #     q = q_init
+    #     # print("q: ", q)
+    #     i = 0
+    #     while True:
+    #         pin.forwardKinematics(model, data, q)
+    #         iMd = data.oMf[ee_frame_id].actInv(target_placement)
+    #         err = pin.log(iMd).vector
+    #         if norm(err) < self.eps:
+    #             success = True
+    #             break
+    #         if i >= self.IT_MAX:
+    #             success = False
+    #             break
+    #         J = pin.computeFrameJacobian(model, data, q, ee_frame_id)
+    #         J = -np.dot(pin.Jlog6(iMd.inverse()), J)
+    #         v = -J.T.dot(solve(J.dot(J.T) + self.damp * np.eye(6), err))
+    #         q = pin.integrate(model, q, v * self.DT)
+    #         # if not i % 10:
+    #         #     print("%d: error = %s" % (i, err.T))
+    #         i += 1
+    #     if success:
+    #         print("Convergence achieved!")
+    #     else:
+    #         print(
+    #             "\nWarning: the iterative algorithm has not reached convergence to the desired precision"
+    #         )
+    #     return success, q
 
-    def publish_joint_positions(self, joint_positions):
-        """Publish the desired joint positions as a JointTrajectory message."""
-        trajectory_msg = JointTrajectory()
-        trajectory_msg.joint_names = ["shoulder_pan_joint", "shoulder_lift_joint", "elbow_joint", "wrist_1_joint", "wrist_2_joint", "wrist_3_joint"]
+    # def publish_joint_positions(self, joint_positions):
+    #     """Publish the desired joint positions as a JointTrajectory message."""
+    #     trajectory_msg = JointTrajectory()
+    #     trajectory_msg.joint_names = ["shoulder_pan_joint", "shoulder_lift_joint", "elbow_joint", "wrist_1_joint", "wrist_2_joint", "wrist_3_joint"]
 
-        point = JointTrajectoryPoint()
-        if joint_positions is not None:
-            point.positions = joint_positions.tolist()
-        duration = Duration()
-        duration.nanosec = 1000000
-        point.time_from_start = duration
+    #     point = JointTrajectoryPoint()
+    #     if joint_positions is not None:
+    #         point.positions = joint_positions.tolist()
+    #     duration = Duration()
+    #     duration.nanosec = 1000000
+    #     point.time_from_start = duration
 
-        trajectory_msg.points = [point]
+    #     trajectory_msg.points = [point]
 
-        self.joint_trajectory_publisher.publish(trajectory_msg)
+    #     self.joint_trajectory_publisher.publish(trajectory_msg)
 
     def publish_ee_pose(self, ee_pose):
         pose_msg = PoseStamped()
-        pose_msg.header.frame_id = 'ft_frame'
+        pose_msg.header.frame_id = 'world'
         pose_msg.pose.position.x = ee_pose[0]
         pose_msg.pose.position.y = ee_pose[1]
         pose_msg.pose.position.z = ee_pose[2]
