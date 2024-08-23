@@ -10,6 +10,7 @@ setup(
     packages=[package_name],
     py_modules=[
         'custom_controller.impedance_controller',
+        'custom_controller.ee_test'
     ],
     data_files=[
         (os.path.join('share', package_name, 'launch'), glob(os.path.join('launch', '*launch.[pxy][yma]*'))),
@@ -25,7 +26,8 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'impedance_controller = custom_controller.impedance_controller:main'
+            'impedance_controller = custom_controller.impedance_controller:main',
+            'ee_test = custom_controller.ee_test:main'
         ],
     },
 )
