@@ -27,7 +27,8 @@ setup(
     entry_points={
         'console_scripts': [
             'impedance_controller = custom_controller.impedance_controller:main',
-            'ee_test = custom_controller.ee_test:main'
+            'ee_test = custom_controller.ee_test:main',
+            'ik_test = custom_controller.ik_test:main',
         ],
     },
 )

@@ -6,6 +6,10 @@ from sensor_msgs.msg import JointState
 from geometry_msgs.msg import PoseStamped, Pose
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from builtin_interfaces.msg import Duration
+from moveit.core.robot_state import RobotState
+from moveit.planning import (
+    MoveItPy,
+)
 
 class EETest(Node):
     def __init__(self):
@@ -24,6 +28,10 @@ class EETest(Node):
 
         # Current state
         self.current_transform = np.eye(4)  # 4x4 identity matrix as initial transform
+
+        self.ur5e = MoveItPy(node_name="moveit_py")
+        self.arm = self.ur5e.get_planning_component("ur_manipulator")
+        self.psm = self.ur5e.get_planning_scene_monitor()
 
     def joint_state_callback(self, msg):
         """Callback to update the current joint states."""
