@@ -98,6 +98,36 @@ def declare_arguments():
                 default_value="true",
                 description="MoveGroup publishes robot description semantic",
             ),
+            DeclareLaunchArgument(
+                "safety_limits",
+                default_value="true",
+                description="Enables the safety limits controller if true.",
+            ),
+            DeclareLaunchArgument(
+                "safety_pos_margin",
+                default_value="0.15",
+                description="The margin to lower and upper limits in the safety controller.",
+            ),
+            DeclareLaunchArgument(
+                "safety_k_position",
+                default_value="20",
+                description="k-position factor in the safety controller.",
+            ),
+            # DeclareLaunchArgument(
+            #     "description_file",
+            #     # default_value=PathJoinSubstitution(
+            #     #     [osFindPackageShare("ur_robot_driver"), "urdf", "ur.urdf.xacro"]
+            #     # ),
+            #     default_value=str(os.path.join(get_package_share_directory("ur_robot_driver"), "urdf", "ur.urdf.xacro")),
+            #     description="URDF/XACRO description file (absolute path) with the robot.",
+            # ),
+            DeclareLaunchArgument(
+                "tf_prefix",
+                default_value="",
+                description="Prefix of the joint names, useful for "
+                "multi-robot setup. If changed than also joint names in the controllers' configuration "
+                "have to be updated.",
+            ),
         ]
     )
 
@@ -109,10 +139,24 @@ def generate_launch_description():
     launch_servo = LaunchConfiguration("launch_servo")
     use_sim_time = LaunchConfiguration("use_sim_time")
     publish_robot_description_semantic = LaunchConfiguration("publish_robot_description_semantic")
+    safety_limits = LaunchConfiguration("safety_limits")
+    safety_pos_margin = LaunchConfiguration("safety_pos_margin")
+    safety_k_position = LaunchConfiguration("safety_k_position")
+    # description_file = LaunchConfiguration("description_file")
+    tf_prefix = LaunchConfiguration("tf_prefix")
+    urdf_file = os.path.join(get_package_share_directory("ur_robot_driver"), "urdf", "ur.urdf.xacro")
 
     moveit_config = (
         MoveItConfigsBuilder(robot_name="ur", package_name="ur_moveit_config")
-        .robot_description_semantic(Path("srdf") / "ur.srdf.xacro", {"name": ur_type})
+        .robot_description(urdf_file, {
+            "safety_limits": safety_limits,
+            "safety_pos_margin": safety_pos_margin,
+            "safety_k_position": safety_k_position,
+            "name": "ur",
+            "ur_type": ur_type,
+            "tf_prefix": tf_prefix
+            })
+        .robot_description_semantic(Path("srdf") / "ur.srdf.xacro", {"name": "ur"})
         .moveit_cpp(
             file_path=get_package_share_directory("custom_controller")
             + "/config/config.yaml"

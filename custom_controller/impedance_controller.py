@@ -2,43 +2,14 @@ import numpy as np
 from scipy.spatial.transform import Rotation as R
 import rclpy
 from rclpy.node import Node
+from std_msgs.msg import String
 from sensor_msgs.msg import JointState
 from geometry_msgs.msg import PoseStamped, WrenchStamped, Pose
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from builtin_interfaces.msg import Duration
-from moveit.core.robot_state import RobotState
-from moveit.planning import (
-    MoveItPy,
-)
+from . import urdf as kdl_parser
+import PyKDL as kdl
 
-def plan_and_execute(
-    robot,
-    planning_component,
-    logger,
-    single_plan_parameters=None,
-    multi_plan_parameters=None,
-    ):
-    """A helper function to plan and execute a motion."""
-    # plan to goal
-    logger.info("Planning trajectory")
-    if multi_plan_parameters is not None:
-            plan_result = planning_component.plan(
-                    multi_plan_parameters=multi_plan_parameters
-            )
-    elif single_plan_parameters is not None:
-            plan_result = planning_component.plan(
-                    single_plan_parameters=single_plan_parameters
-            )
-    else:
-            plan_result = planning_component.plan()
-
-    # execute the plan
-    if plan_result:
-            logger.info("Executing plan")
-            robot_trajectory = plan_result.trajectory
-            robot.execute(robot_trajectory, controllers=[])
-    else:
-            logger.error("Planning failed")
 
 class ImpedanceController(Node):
     def __init__(self):
@@ -57,6 +28,18 @@ class ImpedanceController(Node):
             '/force_torque_sensor_broadcaster/wrench',
             self.force_torque_callback,
             10)
+
+        # self.robot_description_subscription = self.create_subscription(
+        #     String,
+        #     '/robot_description',
+        #     self.robot_description_callback,
+        #     10)
+
+        # Subscribe to the joint states
+        self.joint_state_subscriber = self.create_subscription(
+            JointState, '/joint_states', self.joint_state_callback, 10)
+
+        self.ee_pose_publisher = self.create_publisher(PoseStamped, '/ee_pose', 10)
 
         # Publisher for the joint trajectory and end-effector pose
         self.ee_pose_publisher = self.create_publisher(PoseStamped, '/ee_pose', 10)
@@ -78,35 +61,171 @@ class ImpedanceController(Node):
         # Current joint states
         self.current_joint_positions = None
         self.current_joint_velocities = None
+        self.initialized = False
 
-        self.ur5e = MoveItPy(node_name="moveit_py")
-        self.arm = self.ur5e.get_planning_component("ur_manipulator")
-        self.psm = self.ur5e.get_planning_scene_monitor()
-        # self.robot_model = self.ur5e.get_robot_model()
-        # self.robot_state = RobotState(self.robot_model)
+        # Declare parameters
+        self.declare_parameter('robot_description', '')
+        self.declare_parameter('base_link', 'base_link')
+        self.declare_parameter('end_effector_link', 'tool0')
+
+        # Get URDF from the parameter server
+        self.urdf = self.get_parameter('robot_description').value
+
+        # Parse URDF to KDL Tree
+        self.get_logger().error('Constructing KDL tree')
+        success, kdl_tree = kdl_parser.treeFromString(self.urdf)
+        if not success:
+            self.get_logger().error('Failed to construct KDL tree')
+            return
+
+        # Extract the KDL chain from base_link to end_effector_link
+        self.base_link = self.get_parameter('base_link').value
+        end_effector_link = self.get_parameter('end_effector_link').value
+
+        self.kdl_chain = kdl_tree.getChain(self.base_link, end_effector_link)
+        if self.kdl_chain is None:
+            self.get_logger().error('Failed to get KDL chain')
+            return
+        self.num_joints = self.kdl_chain.getNrOfJoints()
+
+        # Initialize the forward kinematics solver
+        self.fk_solver = kdl.ChainFkSolverPos_recursive(self.kdl_chain)
+        ik_v_solver = kdl.ChainIkSolverVel_pinv(self.kdl_chain)  # Velocity IK solver
+        self.ik_solver = kdl.ChainIkSolverPos_NR(self.kdl_chain, self.fk_solver, ik_v_solver)  # Position IK solver
+
 
     def joint_state_callback(self, msg):
         """Callback to update the current joint states."""
+        if len(msg.position) != self.num_joints:
+            self.get_logger().error('Joint state size does not match the number of joints in the chain')
+            return
         self.current_joint_positions = np.array(msg.position)
         self.current_joint_velocities = np.array(msg.velocity)  # Obtain joint velocities
 
-        if self.current_transform is None:
-            with self.psm.read_only() as scene:
-                psm_robot_state = scene.current_state
-                self.current_transform= psm_robot_state.get_global_link_transform("tool0")
-            # ps_str = np.array2string(self.current_transform[:3,3])
-            # self.get_logger().info(f'sim pos: {ps_str}')
-
-        # self.current_transform = self.robot_state.get_global_link_transform("ft_frame")
-        # pos_str = np.array2string(self.current_transform[:3, 3])
-        # self.get_logger().info(f'pos: {pos_str}\n')
+        # joint_positions = kdl.JntArray(self.num_joints)
+        # for i, position in enumerate(msg.position):
+        #     # joint_positions[i] = position
+        #     # self.get_logger().info(f'i: {i}')
+        #     if i == (self.num_joints-1):
+        #         joint_positions[0] = position
+        #     else:
+        #         joint_positions[i+1] = position
+        joint_positions = self.array_to_jnt_array(msg.position)
         
-        # Extract position and orientation directly from the transformation matrix
-        position = self.current_transform[:3, 3]
-        orientation = self.quaternion_from_matrix(self.current_transform)
+        end_effector_frame = kdl.Frame()
+        self.fk_solver.JntToCart(joint_positions, end_effector_frame)
+        self.current_transform = self.frame_to_transformation_matrix(end_effector_frame)
+
+        pos = [end_effector_frame.p.x(), end_effector_frame.p.y(), end_effector_frame.p.z()]
+        quat = end_effector_frame.M.GetQuaternion()
+        ori = [quat[0], quat[1], quat[2], quat[3]]
 
         # Publish the end-effector pose
-        self.publish_ee_pose(position, orientation)
+        self.publish_ee_pose(pos, ori)
+
+    def array_to_jnt_array(self, array):
+        """
+        Converts a NumPy array or list to a PyKDL JntArray.
+
+        Parameters:
+        - array: NumPy array or list-like object representing joint positions
+
+        Returns:
+        - jnt_array: PyKDL.JntArray object
+        """
+        # Create a JntArray with the same size as the input array
+        jnt_array = kdl.JntArray(len(array))
+
+        # Populate the JntArray with the values from the input array
+        for i in range(len(array)):
+            if i ==(self.num_joints-1):
+                jnt_array[0] = array[i]
+            else:
+                jnt_array[i+1] = array[i]
+
+        return jnt_array
+
+    def jnt_array_to_array(self, jnt_array):
+        """
+        Converts a PyKDL JntArray to a NumPy array.
+
+        Parameters:
+        - jnt_array: PyKDL.JntArray object
+
+        Returns:
+        - array: NumPy array representing joint positions
+        """
+        # Create a NumPy array with the same size as the JntArray
+        array = np.zeros(jnt_array.rows())
+
+        # Populate the NumPy array with the values from the JntArray
+        for i in range(jnt_array.rows()):
+            if i == 0:
+                array[self.num_joints-1] = jnt_array[i]
+            else:
+                array[i] = jnt_array[i-1]
+
+        return array
+
+    def transformation_matrix_to_frame(self, matrix):
+        """
+        Converts a 4x4 transformation matrix to a PyKDL Frame.
+
+        Parameters:
+        - matrix: 4x4 numpy array representing the transformation matrix
+
+        Returns:
+        - frame: PyKDL.Frame object
+        """
+        # Extract the rotation matrix (3x3) and translation vector (3x1) from the transformation matrix
+        rotation_matrix = matrix[:3, :3]
+        translation_vector = matrix[:3, 3]
+
+        # Convert the rotation matrix to a PyKDL.Rotation object
+        rotation = kdl.Rotation(
+            rotation_matrix[0, 0], rotation_matrix[0, 1], rotation_matrix[0, 2],
+            rotation_matrix[1, 0], rotation_matrix[1, 1], rotation_matrix[1, 2],
+            rotation_matrix[2, 0], rotation_matrix[2, 1], rotation_matrix[2, 2]
+        )
+
+        # Convert the translation vector to a PyKDL.Vector object
+        translation = kdl.Vector(translation_vector[0], translation_vector[1], translation_vector[2])
+
+        # Create the PyKDL.Frame using the rotation and translation
+        frame = kdl.Frame(rotation, translation)
+
+        return frame
+
+    def frame_to_transformation_matrix(self, frame):
+        """
+        Converts a PyKDL Frame to a 4x4 transformation matrix.
+
+        Parameters:
+        - frame: PyKDL.Frame object
+
+        Returns:
+        - transformation_matrix: 4x4 numpy array representing the transformation matrix
+        """
+        # Initialize a 4x4 identity matrix
+        transformation_matrix = np.eye(4)
+
+        # Extract the rotation matrix from the frame
+        rotation_matrix = frame.M  # This is a PyKDL.Rotation
+
+        # Convert the PyKDL.Rotation to a 3x3 numpy array
+        for i in range(3):
+            for j in range(3):
+                transformation_matrix[i, j] = rotation_matrix[i, j]
+
+        # Extract the translation vector from the frame
+        translation_vector = frame.p  # This is a PyKDL.Vector
+
+        # Assign the translation vector to the transformation matrix
+        transformation_matrix[0, 3] = translation_vector[0]
+        transformation_matrix[1, 3] = translation_vector[1]
+        transformation_matrix[2, 3] = translation_vector[2]
+
+        return transformation_matrix
 
     def quaternion_from_matrix(self, matrix):
         """Convert a 4x4 transformation matrix to a quaternion using scipy."""
@@ -133,12 +252,8 @@ class ImpedanceController(Node):
 
     def update_control(self):
         """Calculate the compliance control output and apply it."""
-        time_step = 0.0001  # Time step for integration, adjust as needed
-        current_transform = self.current_transform
-        old = current_transform
-        ps_str = np.array2string(current_transform[:3,3])
-        # self.get_logger().info(f'sim pos: {ps_str}')
-
+        time_step = 0.001  # Time step for integration, adjust as needed
+        old = self.current_transform
 
         # Calculate acceleration based on the applied force/torque
         # acceleration = np.linalg.inv(self.mass_matrix) @ (
@@ -159,14 +274,13 @@ class ImpedanceController(Node):
         delta_rotation = R.from_rotvec(self.current_velocity[3:] * time_step).as_matrix()
 
         # Update the current transformation matrix
-        current_transform[:3, 3] += delta_position
-        current_transform[:3, :3] = delta_rotation @ current_transform[:3, :3]
+        self.current_transform[:3, 3] += delta_position
+        self.current_transform[:3, :3] = delta_rotation @ self.current_transform[:3, :3]
 
-        pos_str = np.array2string(current_transform[:3, 3])
+        pos_str = np.array2string(self.current_transform[:3, 3])
         self.get_logger().info(f'new pos: {pos_str}')
-        self.get_logger().info(f'sim pos: {ps_str}')
 
-        pos_str = np.array2string(old[:3, 3] - current_transform[:3, 3])
+        pos_str = np.array2string(old[:3, 3] - self.current_transform[:3, 3])
         self.get_logger().info(f'diff: {pos_str}\n')
 
 
@@ -176,33 +290,35 @@ class ImpedanceController(Node):
             self.current_velocity = np.zeros(6)
 
         # Calculate the inverse kinematics to get the joint positions 
-        joint_positions = self.solve_inverse_kinematics(current_transform)
+        joint_positions = self.solve_inverse_kinematics(self.current_transform)
 
         # Publish the desired joint positions
-        self.publish_joint_positions(joint_positions)
+        # self.publish_joint_positions(joint_positions)
+        self.get_logger().error('6')
 
     def solve_inverse_kinematics(self, desired_transform):
         """Calculate the inverse kinematics using the full transformation matrix."""
-        pose_goal = Pose()
-        pose_goal.position.x = desired_transform[0, 3]
-        pose_goal.position.y = desired_transform[1, 3]
-        pose_goal.position.z = desired_transform[2, 3]
 
-        quaternion = self.quaternion_from_matrix(desired_transform)
-        pose_goal.orientation.x = quaternion[0]
-        pose_goal.orientation.y = quaternion[1]
-        pose_goal.orientation.z = quaternion[2]
-        pose_goal.orientation.w = quaternion[3]
+        desired_pose = self.transformation_matrix_to_frame(desired_transform)
 
-        with self.psm.read_only() as scene:
-            psm_robot_state = scene.current_state
-            psm_robot_state.set_from_ik("ur_manipulator", pose_goal, "tool0")
-            psm_robot_state.update()
-            joint_positions = psm_robot_state.get_joint_group_positions("ur_manipulator")
-            joint_pos_str = np.array2string(joint_positions)
-            # self.get_logger().info(f'joint pos: {joint_pos_str}')
+        initial_joints = self.array_to_jnt_array(self.current_joint_positions)
+        self.get_logger().info('cur py joints: [%.3f, %.3f, %.3f, %.3f, %.3f, %.3f]' %
+                               (self.current_joint_positions[0], self.current_joint_positions[1], self.current_joint_positions[2],
+                                self.current_joint_positions[3], self.current_joint_positions[4], self.current_joint_positions[5]))
+        
+        self.get_logger().info('kdl py joints: [%.3f, %.3f, %.3f, %.3f, %.3f, %.3f]' %
+                               (initial_joints[0], initial_joints[1], initial_joints[2], initial_joints[3], initial_joints[4], initial_joints[5]))
 
-        return joint_positions
+        joint_positions = kdl.JntArray(self.kdl_chain.getNrOfJoints())
+
+        result = self.ik_solver.CartToJnt(initial_joints, desired_pose, joint_positions)
+        self.get_logger().error('5')
+        if result >= 0:
+             self.get_logger().info("IK solution found:")
+             return self.jnt_array_to_array(joint_positions)
+        else:
+             self.get_logger().info("IK solver failed to find a solution")
+             return self.current_joint_positions
 
     def publish_joint_positions(self, joint_positions):
         """Publish the desired joint positions as a JointTrajectory message."""
@@ -211,7 +327,7 @@ class ImpedanceController(Node):
 
         point = JointTrajectoryPoint()
         if joint_positions is not None:
-            point.positions = joint_positions.tolist()
+            point.positions = joint_positions
         duration = Duration()
         duration.nanosec = 1000000
         point.time_from_start = duration
