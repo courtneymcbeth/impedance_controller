@@ -9,7 +9,7 @@ setup(
     version='0.0.0',
     packages=[package_name],
     py_modules=[
-        'custom_controller.impedance_controller',
+        'custom_controller.servo_controller',
         'custom_controller.ee_test'
     ],
     data_files=[
@@ -21,12 +21,12 @@ setup(
     zip_safe=True,
     maintainer='Courtney McBeth',
     maintainer_email='cmcbeth2@illinois.edu',
-    description='ROS2 impedance controller for Jazzy',
+    description='ROS2 custom controllers for Jazzy',
     license='Apache License 2.0',
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'impedance_controller = custom_controller.impedance_controller:main',
+            'servo_controller = custom_controller.servo_controller:main',
             'ee_test = custom_controller.ee_test:main',
             'ik_test = custom_controller.ik_test:main',
         ],

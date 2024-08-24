@@ -7,9 +7,9 @@ from scipy.spatial.transform import Rotation as R
 import numpy as np
 import math
 
-class ImpedanceController(Node):
+class ServoController(Node):
     def __init__(self):
-        super().__init__('impedance_controller')
+        super().__init__('servocontroller')
 
         # Subscribe to the force-torque sensor data
         self.force_torque_subscription = self.create_subscription(
@@ -127,9 +127,9 @@ class ImpedanceController(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    impedance_controller = ImpedanceController()
-    rclpy.spin(impedance_controller)
-    impedance_controller.destroy_node()
+    servo_controller = ServoController()
+    rclpy.spin(servo_controller)
+    servo_controller.destroy_node()
     rclpy.shutdown()
 
 if __name__ == '__main__':

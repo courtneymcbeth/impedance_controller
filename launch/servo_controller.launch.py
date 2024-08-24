@@ -180,12 +180,12 @@ def generate_launch_description():
     ld.add_action(wait_robot_description)
 
 
-    impedance_controller_node = Node(
+    servo_controller_node = Node(
         package="custom_controller",
-        executable="impedance_controller",
+        executable="servo_controller",
         parameters=[moveit_config.to_dict()]
     )
-    ld.add_action(impedance_controller_node)
+    ld.add_action(servo_controller_node)
 
     move_group_node = Node(
         package="moveit_ros_move_group",
