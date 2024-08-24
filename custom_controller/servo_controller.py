@@ -9,7 +9,7 @@ import math
 
 class ServoController(Node):
     def __init__(self):
-        super().__init__('servocontroller')
+        super().__init__('servo_controller')
 
         # Subscribe to the force-torque sensor data
         self.force_torque_subscription = self.create_subscription(
