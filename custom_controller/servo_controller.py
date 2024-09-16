@@ -9,6 +9,8 @@ import math
 from std_srvs.srv import Trigger
 from controller_manager_msgs.srv import SwitchController
 from sensor_msgs.msg import JointState
+from std_msgs.msg import Bool
+import time
 
 
 
@@ -37,7 +39,12 @@ class ServoController(Node):
         self.twist_pub_ = self.create_publisher(TwistStamped, '/servo_node/delta_twist_cmds', 10)
 
         # Set the rate to 500 Hz
-        self.timer = self.create_timer(1.0 / 500.0, self.timer_callback)
+        self.wrench_timer = self.create_timer(1.0 / 500.0, self.wrench_timer_callback)
+        self.prev_interaction = False
+        self.prev_interaction_time = None
+        self.interaction = False
+        self.interaction_msg = Bool()
+        self.interaction_pub = self.create_publisher(Bool, '/interaction', 10)
 
         self.latest_wrench = None
 
@@ -54,7 +61,9 @@ class ServoController(Node):
         
         self.joint_state_sub = self.create_subscription(JointState, '/joint_states', self.joint_state_callback, 10)
         self.joint_torque_pub = self.create_publisher(JointState, '/joint_torques', 10)
-        
+
+        self.interaction_pub_timer = self.create_timer(0.01, self.interaction_callback)
+
 
     def activate_controller(self, controller_name):
         if not self.switch_controller_client.wait_for_service(timeout_sec=1.0):
@@ -131,7 +140,22 @@ class ServoController(Node):
     def wrench_callback(self, msg):
         self.latest_wrench = msg
 
-    def timer_callback(self):
+    def interaction_callback(self):
+        self.interaction_msg.data = self.interaction
+        if self.interaction:
+            self.get_logger().info('Interaction!')
+            self.interaction_pub.publish(self.interaction_msg)
+        else:
+            if self.prev_interaction_time is not None:
+                time_diff = time.time() - self.prev_interaction_time
+                if time_diff > 2.0:
+                    self.get_logger().info('No Interaction')
+                    self.interaction_pub.publish(self.interaction_msg)
+                    self.prev_interaction_time = None
+        # self.prev_interaction = self.interaction
+
+
+    def wrench_timer_callback(self):
         if self.latest_wrench is not None:
             try:
                 # Look up the transformation from ft_frame to tool0 and then tool0 to base_link
@@ -149,6 +173,16 @@ class ServoController(Node):
                 # Nullify force/torque readings with magnitude < 3
                 force = self.nullify_small_magnitudes(force, 3.0)
                 torque = self.nullify_small_magnitudes(torque, 3.0)
+
+                self.prev_interaction = self.interaction
+
+                if math.sqrt(force.x ** 2 + force.y ** 2 + force.z ** 2) < 10.0:
+                    self.interaction = False
+                    if self.prev_interaction == True and self.prev_interaction_time is None:
+                        self.prev_interaction_time = time.time()
+                    return
+
+                self.interaction = True
 
                 # Compute the twist in base_link frame
                 twist = TwistStamped()
