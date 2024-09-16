@@ -6,6 +6,11 @@ from tf2_ros import Buffer, TransformListener, LookupException, ConnectivityExce
 from scipy.spatial.transform import Rotation as R
 import numpy as np
 import math
+from std_srvs.srv import Trigger
+from controller_manager_msgs.srv import SwitchController
+from sensor_msgs.msg import JointState
+
+
 
 class ServoController(Node):
     def __init__(self):
@@ -36,15 +41,58 @@ class ServoController(Node):
 
         self.latest_wrench = None
 
+        self.switch_controller_client = self.create_client(SwitchController, '/controller_manager/switch_controller')
+        self.deactivate_controller('scaled_joint_trajectory_controller')
+
+        # Forward Velocity Controller
+        self.activate_controller('forward_velocity_controller')
+        
         # Create a client for the ServoCommandType service
         self.switch_input_client = self.create_client(ServoCommandType, '/servo_node/switch_command_type')
-
         # Call the service to enable TWIST command type
         self.enable_twist_command()
+        
+        self.joint_state_sub = self.create_subscription(JointState, '/joint_states', self.joint_state_callback, 10)
+        self.joint_torque_pub = self.create_publisher(JointState, '/joint_torques', 10)
+        
 
+    def activate_controller(self, controller_name):
+        if not self.switch_controller_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().warn('Switch control sensor service not available, waiting again...')
+            return
+         
+        request = SwitchController.Request()
+        request.activate_controllers = [controller_name]
+
+        future = self.switch_controller_client.call_async(request)
+        rclpy.spin_until_future_complete(self, future)
+
+        if future.result() is not None and future.result().ok:
+            self.get_logger().info(f'Activated controller: {controller_name}')
+        else:
+            self.get_logger().warn(f'Could not activate controller: {controller_name}')
+
+
+    def deactivate_controller(self, controller_name):
+        if not self.switch_controller_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().warn('Switch control service not available, waiting again...')
+            return
+        
+        request = SwitchController.Request()
+        request.deactivate_controllers = [controller_name]
+
+        future = self.switch_controller_client.call_async(request)
+        rclpy.spin_until_future_complete(self, future)
+
+        if future.result() is not None and future.result().ok:
+            self.get_logger().info(f'Deactivated controller: {controller_name}')
+        else:
+            self.get_logger().warn(f'Could not deactivate controller: {controller_name}')
+            
+    
     def enable_twist_command(self):
         if not self.switch_input_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().warn('Service not available, waiting again...')
+            self.get_logger().warn('Enable twist command service not available, waiting again...')
             return
 
         request = ServoCommandType.Request()
@@ -57,6 +105,28 @@ class ServoController(Node):
             self.get_logger().info('Switched to input type: TWIST')
         else:
             self.get_logger().warn('Could not switch input to: TWIST')
+            
+            
+    def zero_ft_sensor(self):
+        if not self.zero_ft_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().warn('Zero ft sensor service not available, waiting again...')
+            return
+        
+        request = Trigger.Request()
+        future = self.zero_ft_client.call_async(request)
+        rclpy.spin_until_future_complete(self, future)
+
+        if future.result() is not None and future.result().success:
+            self.get_logger().info('Zero ft sensor complete!')
+        else:
+            self.get_logger().warn("Could not zero ft sensor!")
+            
+            
+    def joint_state_callback(self, msg):
+        joint_torque_msg = JointState()
+        # Convert joint current to torque using UR5e torque constants
+        joint_torque_msg.effort = np.roll(np.array(msg.effort), 1) * [0.125, 0.125, 0.125, 0.092, 0.092, 0.092]
+        self.joint_torque_pub.publish(joint_torque_msg)
 
     def wrench_callback(self, msg):
         self.latest_wrench = msg
