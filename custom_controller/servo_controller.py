@@ -134,7 +134,7 @@ class ServoController(Node):
     def joint_state_callback(self, msg):
         joint_torque_msg = JointState()
         # Convert joint current to torque using UR5e torque constants
-        joint_torque_msg.effort = np.roll(np.array(msg.effort), 1) * [0.125, 0.125, 0.125, 0.092, 0.092, 0.092]
+        joint_torque_msg.effort = np.roll(np.array(msg.effort), 1) * [10.0, 10.0, 10.0, 2.0, 2.0, 2.0] # * [0.125, 0.125, 0.125, 0.092, 0.092, 0.092]
         self.joint_torque_pub.publish(joint_torque_msg)
 
     def wrench_callback(self, msg):
