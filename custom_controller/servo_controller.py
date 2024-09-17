@@ -40,6 +40,8 @@ class ServoController(Node):
 
         # Set the rate to 500 Hz
         self.wrench_timer = self.create_timer(1.0 / 500.0, self.wrench_timer_callback)
+
+        # self.vel_timer = self.create_timer(1.0 / 500.0, self.vel_timer_callback)
         self.prev_interaction = False
         self.prev_interaction_time = None
         self.interaction = False
@@ -52,6 +54,7 @@ class ServoController(Node):
         self.deactivate_controller('scaled_joint_trajectory_controller')
 
         # Forward Velocity Controller
+        # self.activate_controller('forward_position_controller')
         self.activate_controller('forward_velocity_controller')
         
         # Create a client for the ServoCommandType service
@@ -153,6 +156,12 @@ class ServoController(Node):
                     self.interaction_pub.publish(self.interaction_msg)
                     self.prev_interaction_time = None
         # self.prev_interaction = self.interaction
+
+    # def vel_timer_callback(self):
+    #     if self.interaction == True and self.prev_interaction == False:
+    #         self.activate_controller('forward_position_controller')
+    #     elif self.interaction == False and self.prev_interaction == True :
+    #         self.activate_controller('forward_velocity_controller')
 
 
     def wrench_timer_callback(self):
